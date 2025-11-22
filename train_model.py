@@ -8,7 +8,7 @@ import os
 import numpy as np
 
 # --- 1. SETUP ---
-print("--- STEP 1: INITIALIZING ---")
+print("--- STEP 1: INITIALIZING HIGH-ACCURACY PIPELINE ---")
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Hardware: {device}")
 
@@ -21,11 +21,16 @@ if not os.path.exists(os.path.join(base_dir, 'train')):
 train_dir = os.path.join(base_dir, 'train')
 test_dir = os.path.join(base_dir, 'test')
 
-# --- 2. PREPROCESSING ---
+# --- 2. ADVANCED PREPROCESSING ---
+# We add ColorJitter (contrast/brightness) and Zoom (RandomResizedCrop)
 train_transforms = transforms.Compose([
     transforms.Resize((224, 224)),
     transforms.RandomHorizontalFlip(),
-    transforms.RandomRotation(15), # Increased rotation to force learning shapes
+    transforms.RandomRotation(10),
+    # Simulate different X-Ray exposure levels
+    transforms.ColorJitter(brightness=0.2, contrast=0.2), 
+    # Slight zoom to force looking at details
+    transforms.RandomResizedCrop(224, scale=(0.85, 1.0)), 
     transforms.ToTensor(),
     transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
 ])
@@ -36,53 +41,50 @@ test_transforms = transforms.Compose([
     transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
 ])
 
-print("Scanning dataset...")
 train_data = datasets.ImageFolder(train_dir, transform=train_transforms)
 test_data = datasets.ImageFolder(test_dir, transform=test_transforms)
 
-# --- 3. THE MAGIC FIX: WEIGHTED SAMPLER ---
-# This section calculates how many Normal vs Pneumonia images exist
-# and forces the loader to pick them equally.
-
-targets = np.array(train_data.targets) # [0, 0, 1, 1, 1, 0...]
-class_counts = np.bincount(targets)    # [Normal_Count, Pneumonia_Count]
-print(f"Dataset Imbalance found: Normal={class_counts[0]}, Pneumonia={class_counts[1]}")
-
-# Calculate weight for each class (inverse of count)
+# --- 3. BALANCED SAMPLER (Keep this, it's working!) ---
+targets = np.array(train_data.targets)
+class_counts = np.bincount(targets)
 class_weights = 1. / class_counts
-sample_weights = class_weights[targets] # Assign a weight to every single image
+sample_weights = class_weights[targets]
 
-# Create the sampler
 sampler = WeightedRandomSampler(
     weights=torch.from_numpy(sample_weights).double(),
     num_samples=len(sample_weights),
     replacement=True
 )
 
-# Pass sampler to DataLoader (Note: shuffle=False is required when using sampler)
 train_loader = DataLoader(train_data, batch_size=32, sampler=sampler, pin_memory=True)
 test_loader = DataLoader(test_data, batch_size=32, shuffle=False, pin_memory=True)
 
-# --- 4. MODEL ARCHITECTURE (ResNet18) ---
-print("\n--- STEP 4: LOADING RESNET18 ---")
-model = models.resnet18(weights='IMAGENET1K_V1') 
+# --- 4. MODEL UPGRADE: DENSENET121 ---
+print("\n--- STEP 4: LOADING DENSENET121 (Medical Standard) ---")
+# DenseNet is more robust for medical images than ResNet
+model = models.densenet121(weights='IMAGENET1K_V1') 
 
-num_ftrs = model.fc.in_features
-model.fc = nn.Sequential(
+# DenseNet structure is different. The classifier is called 'classifier', not 'fc'
+num_ftrs = model.classifier.in_features 
+model.classifier = nn.Sequential(
     nn.Linear(num_ftrs, 1),
     nn.Sigmoid()
 )
 
 model = model.to(device)
 
-# --- 5. TRAINING ---
-criterion = nn.BCELoss() 
-# Lower learning rate to prevent "forgetting" the pre-trained knowledge
-optimizer = optim.Adam(model.parameters(), lr=0.00005) 
+# --- 5. OPTIMIZER & SCHEDULER ---
+criterion = nn.BCELoss()
+# Start slightly faster (1e-4) because we have a scheduler now
+optimizer = optim.Adam(model.parameters(), lr=0.0001, weight_decay=1e-5) 
 
-epochs = 5 # 5 Epochs ensures it sees enough "Normal" examples
+# SCHEDULER: "The Parking Sensor"
+# Reduce learning rate by factor of 0.1 every 4 epochs
+scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=4, gamma=0.1)
 
-print("\n--- STEP 5: BALANCED TRAINING STARTING ---")
+epochs = 10 # Increase epochs because we are finetuning deeper
+
+print("\n--- STEP 5: TRAINING STARTING ---")
 for epoch in range(epochs):
     model.train()
     running_loss = 0.0
@@ -103,11 +105,15 @@ for epoch in range(epochs):
         predicted = (outputs > 0.5).float()
         total += labels.size(0)
         correct += (predicted == labels).sum().item()
-        
+    
+    # Update the learning rate
+    current_lr = optimizer.param_groups[0]['lr']
+    scheduler.step()
+    
     avg_loss = running_loss / len(train_loader)
     acc = 100 * correct / total
-    print(f"Epoch {epoch+1}/{epochs} | Loss: {avg_loss:.4f} | Accuracy: {acc:.2f}%")
+    print(f"Epoch {epoch+1}/{epochs} | LR: {current_lr:.6f} | Loss: {avg_loss:.4f} | Acc: {acc:.2f}%")
 
-print("\nSaving balanced model...")
+print("\nSaving DenseNet model...")
 torch.save(model.state_dict(), 'pneumonia_model.pth')
-print("Done! Now run evaluate_model.py again.")
+print("Done.")

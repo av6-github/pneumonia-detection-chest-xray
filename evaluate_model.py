@@ -7,12 +7,9 @@ import os
 
 # --- HELPER: BUILD THE RESNET MODEL ---
 def get_model():
-    # We load the structure of ResNet18
-    model = models.resnet18(weights=None) 
-    
-    # We change the last layer to match what we trained (1 output + Sigmoid)
-    num_ftrs = model.fc.in_features
-    model.fc = nn.Sequential(
+    model = models.densenet121(weights=None)
+    num_ftrs = model.classifier.in_features
+    model.classifier = nn.Sequential(
         nn.Linear(num_ftrs, 1),
         nn.Sigmoid()
     )

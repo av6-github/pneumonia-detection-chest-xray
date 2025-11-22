@@ -13,9 +13,9 @@ MODEL_PATH = 'pneumonia_model.pth'
 
 # --- MODEL DEFINITION ---
 def load_model():
-    model = models.resnet18(weights=None) # Structure only
-    num_ftrs = model.fc.in_features
-    model.fc = nn.Sequential(
+    model = models.densenet121(weights=None)
+    num_ftrs = model.classifier.in_features
+    model.classifier = nn.Sequential(
         nn.Linear(num_ftrs, 1),
         nn.Sigmoid()
     )
